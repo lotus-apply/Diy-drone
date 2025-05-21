@@ -1,0 +1,789 @@
+
+
+ <!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>ドローンチューニング</title>
+
+  
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; background: #111; color: white; font-family: sans-serif; }
+    #ui { position: absolute; top: 10px; left: 10px; z-index: 1; background: #222; overflow-x: hidden;}
+    button, input { margin: 5px; }
+    #motorChart {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: white;
+      border-radius: 8px;
+    }
+    #box2{
+      background: #ff838b;
+      color: black;
+      position: absolute;
+      right: 230px; /* ウィンドウの右端に寄せる */
+      bottom: 85px;
+    }
+    #box1 {
+      background: #eeee8b;   
+      color: black;
+      position: absolute;
+      right: 80px; /* ウィンドウの右端に寄せる */
+      bottom: 0px;
+    }
+    #emergencyStop{
+      background: #ff838b;   
+      position: absolute;
+      right: 40px; /* ウィンドウの左端に寄せる */
+      bottom: -150px;
+    }
+    #log { white-space: pre-wrap; background: #eee; padding: 10px; margin-top: 20px; height: 100px; overflow-y: scroll; }
+  </style>
+
+</head>
+<body>
+  <div id="ui">
+           
+    <div>
+      <h2>ドローンチューニング</h2>
+    <button id="connect">シリアル接続</button>
+
+    Pitch調整: <input type="range" id="pitchAdjust" min="-30" max="30" value="0">
+    Yaw調整: <input type="range" id="rollAdjust" min="-30" max="30" value="0">
+    Roll調整: <input type="range" id="yawAdjust" min="-180" max="180" value="0">
+
+  <label for="pGain">P:  <span id="pVal">0.0</span></label>
+  <input type="range" id="pGain" min="0" max="10" step="0.1" value="0">
+
+  <label for="iGain">I:  <span id="iVal">0.00</span></label>
+  <input type="range" id="iGain" min="0" max="1"  step="0.01" value="0">
+
+  <label for="dGain">D:  <span id="dVal">0.0</span></label>
+  <input type="range" id="dGain" min="0" max="10" step="0.1" value="0">
+
+  <button id="sendPid">SET_PID送信</button></br>
+
+  <label>
+  <input type="checkbox" id="motorTypeSwitch" />
+  ブラシレスモーターに切り替え
+  </label>
+
+ 
+ 
+ <div class="slider-block" id="box1" style="transform: rotate(0.25turn);">
+   
+    <!-- 緊急停止ボタン -->
+    <button id="emergencyStop" style="transform: rotate(-0.25turn);">緊</br>急</br>停</br>止</button></br>
+ 
+    <label for="slider4">MOTOR4 offset: <span id="v4">0</span></label></br>
+    <input type="range" id="slider4" min="0" max="1000" value="0"></br>
+
+
+    <label for="slider3">MOTOR3 offset: <span id="v3">0</span></label></br>
+    <input type="range" id="slider3" min="0" max="1000" value="0"></br>
+  
+    <label for="slider2">MOTOR2 offset: <span id="v2">0</span></label></br>
+    <input type="range" id="slider2" min="0" max="1000" value="0"></br>
+
+    <label for="slider1">MOTOR1 offset: <span id="v1">0</span></label></br>
+    <input type="range" id="slider1" min="0" max="1000" value="0"></br>
+ 
+ 
+ </div>   
+
+ <div class="ELEVATOR" id="box2" style="transform: rotate(0.25turn);">
+    <label for="slider0">E L E V A T O R : <span id="v0">-500</span></label></br>
+    <input type="range" id="slider0" min="-500" max="500" value="-500"></br>
+ </div>
+  
+
+  </dir>
+
+  
+
+
+
+  <p>送信ログ:</p>
+  <div id="log" style="height: 100px; width:500px; overflow-y: scroll; border: 1px solid #ccc; padding: 5px; color: black; background-color: white;"></div>
+ </div>
+
+
+  
+ 
+</div>
+
+<div>
+<canvas id="motorChart" width="500" height="300" style="position:absolute; bottom:10px; left:10px; background:white; border-radius:8px;"></canvas>
+</div>
+ 
+ 
+
+  
+  <script type="module">
+    import * as THREE from 'https://cdn.skypack.dev/three@0.152.2';  
+
+
+
+
+    
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    light.position.set(10, 10, 10);
+    scene.add(light);
+    scene.add(new THREE.AmbientLight(0x333333));
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////
+
+// Chart.jsの初期化
+const ctx = document.getElementById('motorChart').getContext('2d');
+const chartData = {
+  labels: [],
+  datasets: [
+    { label: 'FL(M1)', data: [], borderColor: 'red', backgroundColor: 'red', fill: false },
+    { label: 'FR(M2)', data: [], borderColor: 'green', backgroundColor: 'green', fill: false },
+    { label: 'BL(M3)', data: [], borderColor: 'blue', backgroundColor: 'blue',fill: false },
+    { label: 'BR(M4)', data: [], borderColor: 'orange',backgroundColor: 'orange', fill: false }
+  ]
+
+
+};
+
+
+
+  
+
+
+ const motorChart = new Chart(ctx, {
+      type: 'line',
+      data: chartData,
+
+      options: {
+        animation: false,
+        responsive: false,
+        layout: { padding: { top: 30 } },
+        scales: {
+          x: { title: { display: true, text: 'Time (s)' } },
+          y: { title: { display: true, text: 'PWM' }, min: 1000, max: 2000 }
+        },
+        plugins: {
+          legend: { display: true },
+          tooltip: { enabled: true },
+        }
+      },
+      plugins: [{
+        id: 'topLabelPlugin',
+        afterDraw(chart) {
+          const ctx = chart.ctx;
+          const datasets = chart.data.datasets;
+          const labels = chart.data.labels;
+          const lastIndex = labels.length - 1;
+
+          ctx.save();
+          //ctx.font = '14px Arial';
+          ctx.font = "16px monospace"; // 固定幅フォントでスペース感を出す
+          
+
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+
+          let x = chart.chartArea.left - 48;
+          const y = chart.chartArea.top - 40;
+
+
+          datasets.forEach(ds => {
+            const value = ds.data[lastIndex] ?? '0000';
+            const text = `${value}`;
+            ctx.fillStyle = ds.borderColor;
+            ctx.fillText(text, x + 50, y); // xに加算して横位置を調整
+            //ctx.fillText(text, x, y);
+            x += ctx.measureText(text).width + 63; //文字間隔
+          });
+
+          ctx.restore();
+        }
+      }]
+    });
+
+
+let startTime = Date.now();
+
+
+
+
+ 
+
+ 
+// データ追加関数
+function updateMotorChart(m1, m2, m3, m4) {
+  //console.log("Updating chart:", m1, m2, m3, m4); // ←追加してみて
+
+  const now = (Date.now() - startTime) / 1000;
+  chartData.labels.push(now.toFixed(1));
+  chartData.datasets[0].data.push(m1);
+  chartData.datasets[1].data.push(m2);
+  chartData.datasets[2].data.push(m3);
+  chartData.datasets[3].data.push(m4);
+
+
+
+
+ 
+  if (chartData.labels.length > 50) {
+    chartData.labels.shift();
+    chartData.datasets.forEach(ds => ds.data.shift());
+  }
+
+
+
+  motorChart.update();
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////
+    // 頂点定義（厚み z=±0.25）
+    const topZ = 0.125, bottomZ = -0.125;
+
+    const vertices = [
+      // 上面（赤）
+      [-1.5, -2, topZ], [1.5, -2, topZ], [0, 2, topZ],
+      // 下面（暗赤）
+      [-1.5, -2, bottomZ], [1.5, -2, bottomZ], [0, 2, bottomZ]
+    ];
+
+    // 面の定義
+    const positions = [];
+
+    // 上面（三角形1枚）
+    positions.push(...vertices[0], ...vertices[1], ...vertices[2]);
+    // 下面（三角形1枚）
+    positions.push(...vertices[5], ...vertices[4], ...vertices[3]);
+    // 側面（3面、四角→三角2枚ずつ）
+    const sides = [[0,1,4,3],[1,2,5,4],[2,0,3,5]];
+    for (const [a,b,c,d] of sides) {
+      positions.push(...vertices[a], ...vertices[b], ...vertices[c]);
+      positions.push(...vertices[c], ...vertices[d], ...vertices[a]);
+    }
+
+const uvs = [];
+
+// 上面（UV） - 画像を三角形にマッピング
+uvs.push(
+  0, 0,   // 頂点0: 左下
+  1, 0,   // 頂点1: 右下
+  0.5, 1  // 頂点2: 上
+);
+
+
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions.flat(), 3));
+    geometry.computeVertexNormals();
+
+   //geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+   //画像を読み込む
+   //const loader = new THREE.TextureLoader();
+   //THREE.ImageUtils.crossOrigin = "*";
+   //const texture = loader.load('https://lotus-appli.com/youtube-data/imgs/kao.jpg');
+   //texture.colorSpace = THREE.SRGBColorSpace;
+   
+
+
+
+  // 材質リスト：各面ごとに分ける
+ const materials = [
+  new THREE.MeshPhongMaterial({ color: 0xff6666, side: THREE.DoubleSide }), // 下面
+  new THREE.MeshPhongMaterial({ color: 0xff6666, side: THREE.DoubleSide }), // 上面
+  //new THREE.MeshPhongMaterial({map: texture}), // 上面
+  new THREE.MeshPhongMaterial({ color: 0xffffff, side: THREE.DoubleSide }), // 側面1
+  new THREE.MeshPhongMaterial({ color: 0x88ccff, side: THREE.DoubleSide }), // 側面2
+  new THREE.MeshPhongMaterial({ color: 0xffcc88, side: THREE.DoubleSide })  // 側面3
+];
+
+
+// 各三角形ごとのグループ設定（2枚×3側面 = 6枚）
+geometry.clearGroups();
+geometry.addGroup(0, 3, 0);   // 上面
+geometry.addGroup(3, 3, 1);   // 下面
+geometry.addGroup(6, 2 * 3, 2); // 側面1（2枚）
+geometry.addGroup(12, 2 * 3, 3); // 側面2（2枚）
+geometry.addGroup(18, 2 * 3, 4); // 側面3（2枚）
+
+
+const drone = new THREE.Mesh(geometry, materials);
+scene.add(drone);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// 三角形の垂直尾翼(厚みあり)を作成
+
+    // 頂点定義（厚み z= 0.1）
+    const topF = 0.05, bottomF = -0.05;
+
+    const verticesF = [
+      // 上面（赤）
+      [-0.5, -0.5, topF], [0.5, -0.5, topF], [0, 0.5, topF],
+      // 下面（暗赤）
+      [-0.5, -0.5, bottomF], [0.5, -0.5, bottomF], [0, 0.5, bottomF]
+    ];
+
+    // 面の定義
+    const positionsF = [];
+
+    // 上面（三角形1枚）
+    positionsF.push(...verticesF[0], ...verticesF[1], ...verticesF[2]);
+    // 下面（三角形1枚）
+    positionsF.push(...verticesF[5], ...verticesF[4], ...verticesF[3]);
+    // 側面（3面、四角→三角2枚ずつ）
+    const sidesF = [[0,1,4,3],[1,2,5,4],[2,0,3,5]];
+    for (const [a,b,c,d] of sidesF) {
+      positionsF.push(...verticesF[a], ...verticesF[b], ...verticesF[c]);
+      positionsF.push(...verticesF[c], ...verticesF[d], ...verticesF[a]);
+    }
+
+    const geometryF = new THREE.BufferGeometry();
+    geometryF.setAttribute('position', new THREE.Float32BufferAttribute(positionsF.flat(), 3));
+    geometryF.computeVertexNormals();
+
+
+    // 材質リスト：各面ごとに分ける
+
+
+const materialsF = [
+  new THREE.MeshPhongMaterial({ color: 0x5555ff, side: THREE.DoubleSide }), // 上面
+  new THREE.MeshPhongMaterial({ color: 0x5555ff, side: THREE.DoubleSide }), // 下面
+  new THREE.MeshPhongMaterial({ color: 0xffffff, side: THREE.DoubleSide }), // 側面1
+  new THREE.MeshPhongMaterial({ color: 0xffffff, side: THREE.DoubleSide }), // 側面2
+  new THREE.MeshPhongMaterial({ color: 0xffffff, side: THREE.DoubleSide })  // 側面3
+];
+
+
+
+// 各三角形ごとのグループ設定（2枚×3側面 = 6枚）
+geometryF.clearGroups();
+geometryF.addGroup(0, 3, 0);   // 上面
+geometryF.addGroup(3, 3, 1);   // 下面
+geometryF.addGroup(6, 2 * 3, 2); // 側面1（2枚）
+geometryF.addGroup(12, 2 * 3, 3); // 側面2（2枚）
+geometryF.addGroup(18, 2 * 3, 4); // 側面3（2枚）
+
+
+const F = new THREE.Mesh(geometryF, materialsF);
+
+// 回転して垂直に立て、機体後方中央に配置
+//F.rotation.x = Math.PI / 46;    // X軸回転で垂直にする
+F.rotation.y = Math.PI / 2; // Z軸で90度回転（垂直方向に立てる）
+
+
+F.position.set(0, -1.45, -0.4);  // 高さと後方位置
+
+drone.add(F);
+
+
+
+
+
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////
+//三角錐
+const geometry3 = new THREE.ConeGeometry(0.10, 1.2, 26 );
+const material3 = new THREE.MeshBasicMaterial( {color: 0x666600} );
+const cone1 = new THREE.Mesh( geometry3, material3 );
+cone1.position.set(-0.75, 1.8, 0.0);  // 高さと後方位置
+cone1.rotation.z = Math.PI / 4;    // Z軸回転で垂直にする
+
+const cone2 = new THREE.Mesh( geometry3, material3 );
+cone2.position.set(+0.75, 1.8, 0.0);  // 高さと後方位置
+cone2.rotation.z = - Math.PI / 4;    // Z軸回転で垂直にする
+
+drone.add(cone1);
+drone.add(cone2);
+//////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////
+//キューブ
+const geometryQ = new THREE.BoxGeometry( 0.6, 2.2, 0.4 );
+const materialQ = new THREE.MeshBasicMaterial( {color: 0xFFFFFF} );
+const cube = new THREE.Mesh( geometryQ, materialQ );
+cube.position.set(+0.0, -0.86, -0.2);  // 高さと後方位置
+//cube.rotation.z = - Math.PI / 4;    // Z軸回転で垂直にする
+
+drone.add(cube);
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 三角形の垂直尾翼を作成ーペライ版使ってない
+const finShape = new THREE.Shape();
+finShape.moveTo(0, 0);      // 下端
+finShape.lineTo(0.5, 1);    // 上端（右上）
+finShape.lineTo(-0.5, 1);   // 上端（左上）
+finShape.lineTo(0, 0);      // 閉じる
+
+const finGeometry = new THREE.ShapeGeometry(finShape);
+const finMaterial = new THREE.MeshPhongMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+const fin = new THREE.Mesh(finGeometry, finMaterial);
+
+// 回転して垂直に立て、機体後方中央に配置
+fin.rotation.x = -  Math.PI / 2;    // X軸回転で垂直にする
+fin.rotation.y = Math.PI / 2; // Z軸で90度回転（垂直方向に立てる）
+
+
+fin.position.set(0, -1.8, -0.9);  // 高さと後方位置
+//drone.add(fin); // 本体に追加
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+    camera.position.set(0, 2, 8);
+
+    const pitchAdjust = document.getElementById('pitchAdjust');
+    const rollAdjust = document.getElementById('rollAdjust');
+    const yawAdjust = document.getElementById('yawAdjust');
+
+
+
+    let pitch = 0, roll = 0, yaw = 0;
+// ノイズ対策：履歴バッファを使った移動平均
+const bufferSize = 5;
+const yawBuffer = [], pitchBuffer = [], rollBuffer = [];
+
+function smoothValue(buffer, newValue) {
+  buffer.push(newValue);
+  if (buffer.length > bufferSize) buffer.shift();
+  const sum = buffer.reduce((a, b) => a + b, 0);
+  return sum / buffer.length;
+}
+
+
+
+
+
+
+
+
+function animate() {
+
+ 
+  requestAnimationFrame(animate);
+  const pAdj = parseFloat(pitchAdjust.value);
+  const rAdj = parseFloat(rollAdjust.value);
+  const yAdj = parseFloat(yawAdjust.value);
+
+  // Yaw（機体のY軸）→ rotation.y
+  // Pitch（機体のX軸）→ rotation.x
+  // Roll（機体のZ軸）→ rotation.z
+  drone.rotation.x = Math.PI / 2 + THREE.MathUtils.degToRad(pAdj + pitch);  // 寝かせた上でPitch加算
+  drone.rotation.y = THREE.MathUtils.degToRad(yAdj + yaw);
+  //drone.rotation.z = Math.PI  + THREE.MathUtils.degToRad(rAdj - roll);
+  drone.rotation.z = Math.PI  + THREE.MathUtils.degToRad(rAdj);
+
+  renderer.render(scene, camera);
+}
+
+    
+
+    animate();
+
+
+
+
+ 
+    let port = null;
+    let writer = null;
+
+    
+
+
+
+    // ログ出力関数
+    function logMessage(message) {
+  	const logDiv = document.getElementById('log');
+  	const timestamp = new Date().toLocaleTimeString();
+  	const entry = document.createElement('div');
+  	entry.textContent = `[${timestamp}] ${message}`;
+  	logDiv.appendChild(entry);
+  	logDiv.scrollTop = logDiv.scrollHeight; // スクロール追従
+    }
+
+   
+   let initial = 0 ;
+
+    document.getElementById('connect').addEventListener('click', async () => {
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 9600 });
+
+              
+        const reader = port.readable.getReader();
+        writer = port.writable.getWriter();
+               
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let lines = buffer.split('\n');
+          buffer = lines.pop();
+
+
+         for (let line of lines) {
+            const parts = line.trim().split(',');
+         
+         // READY 検出
+    	 if (parts.length === 1 && parts[0] === "READY") {
+              logMessage('READY');
+              continue;                     // 以降の処理はスキップ
+         }
+
+
+
+         // ACK_PID 検出
+    	 if (parts.length === 1 && parts[0] === "ACK_PID") {
+              logMessage('受信: ACK_PID');
+              continue;                     // 以降の処理はスキップ
+         }
+   
+	 //ACK_MOTOR_TYPE 検出
+    	 if (parts.length === 1 && parts[0] === "ACK_MOTOR_TYPE") {
+              logMessage('受信: ACK_MOTOR_TYPE');
+              continue;                     // 以降の処理はスキップ
+         }
+
+         //ACK_MOTOR_OFFSET 検出
+         if (parts.length === 1 && parts[0] === "ACK_MOTOR_OFFSET") {
+              logMessage('受信: ACK_MOTOR_OFFSET');
+              continue;                     // 以降の処理はスキップ
+         }
+
+          //ACK_ELEVATOThrottle 検出
+         if (parts.length === 1 && parts[0] === "ACK_ELEVATOThrottle") {
+              logMessage('受信: ACK_ELEVATOThrottle');
+              continue;                     // 以降の処理はスキップ
+         }
+       
+         //ACK_STOP 検出
+         if (parts.length === 1 && parts[0] === "ACK_STOP") {
+              logMessage('受信: ACK_STOP');
+              continue;                     // 以降の処理はスキップ
+         }
+
+
+
+         //CORRECTION 検出
+         if (parts.length === 5 || parts[0] === "CORRECTION"){     //なぜか”｜｜”？”＆＆”ちゃうん？？
+            
+            document.getElementById("slider1").value = Number(parts[1]);
+            document.getElementById('v1').textContent = Number(parts[1]);
+
+            document.getElementById("slider2").value = Number(parts[2]);
+            document.getElementById('v2').textContent = Number(parts[2]);
+
+            document.getElementById("slider3").value = Number(parts[3]);
+            document.getElementById('v3').textContent = Number(parts[3]);
+
+            document.getElementById("slider4").value = Number(parts[4]);
+            document.getElementById('v4').textContent = Number(parts[4]);
+            logMessage(`READ Mother-offset`);  
+            
+         }
+
+         //CORRECTION 検出
+         if (parts.length === 4 || parts[0] === "CORRECTION2"){     //なぜか”｜｜”？”＆＆”ちゃうん？？
+          
+            document.getElementById("pGain").value =   Number(parts[1]);
+            document.getElementById('pVal').textContent = Number(parts[1]);
+            document.getElementById("iGain").value =   Number(parts[2]);
+            document.getElementById('iVal').textContent = Number(parts[2]);
+            document.getElementById("dGain").value =   Number(parts[3]);
+            document.getElementById('dVal').textContent = Number(parts[3]);
+            logMessage(`READ P I D`);  
+          }       
+
+         //motorChart 検出
+         if (parts.length === 8 && parts[0] === "motorChart") {
+	     yaw    = smoothValue(yawBuffer,   parseFloat(parts[1]) || 0);
+	     pitch  = smoothValue(pitchBuffer, parseFloat(parts[2]) || 0);
+	     roll   = smoothValue(rollBuffer,  parseFloat(parts[3]) || 0);
+             // 必要なら以下も使えるにゃ
+             const m1 = Number(parts[4]);
+	     const m2 = Number(parts[5]);
+	     const m3 = Number(parts[6]);
+	     const m4 = Number(parts[7]);
+             updateMotorChart(m1, m2, m3, m4);
+
+          }
+
+          //初期値一回だけ読み込み
+　　　　　if(initial == 0){
+             const command = `initial\n`;
+             const data = new TextEncoder().encode(command);
+             await writer.write(data);
+             logMessage(`初期値読み込み請求`);  
+             initial = 1 ;
+          }
+
+
+        }
+
+
+
+
+      }
+
+
+　
+        reader.releaseLock();
+      } catch (err) {
+        alert('シリアル接続エラー: ' + err);
+      }
+
+
+
+    });
+
+
+ 
+    // スライダー表示更新
+    ['p','i','d'].forEach(letter => {
+      const slider = document.getElementById(letter + 'Gain');
+      const display = document.getElementById(letter + 'Val');
+      slider.addEventListener('input', () => {
+        display.textContent = parseFloat(slider.value).toFixed(letter==='i'?2:1);
+      });
+    });
+
+    // SET_PID 送信ボタン
+    document.getElementById('sendPid').addEventListener('click', async () => {
+      if (!writer) {
+        logMessage('先に「シリアル接続」を押してください');
+
+        return;
+      }
+      const p = parseFloat(document.getElementById('pGain').value);
+      const i = parseFloat(document.getElementById('iGain').value);
+      const d = parseFloat(document.getElementById('dGain').value);
+      const cmd = `SET_PID,${p.toFixed(2)},${i.toFixed(2)},${d.toFixed(2)}\n`;
+      await writer.write(new TextEncoder().encode(cmd));
+      logMessage(`送信: ${cmd.trim()}`);
+
+
+    });
+
+
+    document.getElementById('motorTypeSwitch').addEventListener('change', async (e) => {
+  	const useBrush = e.target.checked;
+  	const mode = useBrush ? 'BRUSHLESS' : 'BRUSH';
+  	const command = `SET_MOTOR_TYPE,${mode}\n`;
+  	await writer.write(new TextEncoder().encode(command));
+  	logMessage(`送信: ${command.trim()}`);
+   });
+
+    
+
+
+    async function sendMotorCommand() {
+      if (!writer) return;
+      const m1 = document.getElementById("slider1").value;
+      const m2 = document.getElementById("slider2").value;
+      const m3 = document.getElementById("slider3").value;
+      const m4 = document.getElementById("slider4").value;
+
+      const command = `MOTOR,${m1},${m2},${m3},${m4}\n`;
+      const data = new TextEncoder().encode(command);
+      await writer.write(data);
+      logMessage(`送信: ${command.trim()}`);
+    }
+
+    async function sendMotorCommand2() {
+      if (!writer) return;
+      const m0 = document.getElementById("slider0").value;
+  
+      const command = `ELEVATOR,${m0}\n`;
+      const data = new TextEncoder().encode(command);
+      await writer.write(data);
+      logMessage(`送信: ${command.trim()}`);
+    }
+
+    async function sendMotorCommand3() {
+      if (!writer) return;
+      const command = `STOP\n`;
+      const data = new TextEncoder().encode(command);
+      await writer.write(data);
+      logMessage(`送信: ${command.trim()}`);
+    }
+
+
+    // スライダー変更イベント
+    ["slider1", "slider2", "slider3", "slider4"].forEach((id, index) => {
+      document.getElementById(id).addEventListener('input', () => {
+        document.getElementById(`v${index + 1}`).textContent = document.getElementById(id).value;
+        sendMotorCommand();
+      });
+    });
+
+    //スライダー変更イベント
+　　document.getElementById("slider0").addEventListener('input', () => {
+        document.getElementById(`v0`).textContent = document.getElementById("slider0").value;
+         sendMotorCommand2();
+    });
+
+
+
+    // 緊急停止ボタン処理
+    const emergencyButton = document.getElementById('emergencyStop');
+    emergencyButton.addEventListener('click', () => {
+    	const emergencyValue = -500;
+    	// ここで必要なスライダーを全部リセット
+
+    	document.getElementById("slider0").value = emergencyValue;
+    	document.getElementById('v0').textContent = emergencyValue;
+
+    	//document.getElementById("slider1").value = emergencyValue;
+    	//document.getElementById('v1').textContent = emergencyValue;
+
+    	//document.getElementById("slider2").value = emergencyValue;
+    	//document.getElementById('v2').textContent = emergencyValue;
+
+    	//document.getElementById("slider3").value = emergencyValue;
+    	//document.getElementById('v3').textContent = emergencyValue;
+
+    	//document.getElementById("slider4").value = emergencyValue;
+    	//document.getElementById('v4').textContent = emergencyValue;
+
+    	// シリアル送信など必要ならここで追加
+    	sendMotorCommand3();
+
+    });
+
+</script>
+
+
+</body>
+</html>
