@@ -188,7 +188,7 @@ void setup() {
 
 float ax, ay, az;
 float ax_filtered = 0, ay_filtered = 0, az_filtered = 0;
-float alpha = 0.10; // 0.1～0.3くらいが目安
+float alpha = 0.09; // 0.1～0.3くらいが目安
 
 void loop() {
   if (stringComplete) {
@@ -406,10 +406,15 @@ void updateMotors(int m1, int m2, int m3, int m4) {
 void writeMotorPWM(int pin, int value) {
   value = constrain(value, 1000, 2000);
   int duty = map(value, 1000, 2000, 0, 255); // PWM用にマッピング
-  //int duty = constrain(map(value, 1000, 2000, 0, 255), 0, 255);
+  //analogWrite(pin, duty);
 
-  analogWrite(pin, duty);
-  
+  //////////////////////////////////////////////////////////////////////////
+  //非線形マッピング（指数スケーリング）で調整を緩やかにする
+  float scaled = pow((float)duty / 255.0, 2.0); // 2.0 = カーブの強さ
+  int duty2 = scaled * 255;
+  analogWrite(pin, duty2);
+  //////////////////////////////////////////////////////////////////////////
+
 }
 
 void lodeinitial(){
